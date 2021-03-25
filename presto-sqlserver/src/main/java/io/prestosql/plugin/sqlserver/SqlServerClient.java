@@ -14,15 +14,15 @@
 package io.prestosql.plugin.sqlserver;
 
 import com.google.common.base.Joiner;
-import com.microsoft.sqlserver.jdbc.SQLServerDriver;
 import io.prestosql.plugin.jdbc.BaseJdbcClient;
 import io.prestosql.plugin.jdbc.BaseJdbcConfig;
 import io.prestosql.plugin.jdbc.ColumnMapping;
-import io.prestosql.plugin.jdbc.DriverConnectionFactory;
+import io.prestosql.plugin.jdbc.ConnectionFactory;
 import io.prestosql.plugin.jdbc.JdbcColumnHandle;
 import io.prestosql.plugin.jdbc.JdbcIdentity;
 import io.prestosql.plugin.jdbc.JdbcTableHandle;
 import io.prestosql.plugin.jdbc.JdbcTypeHandle;
+import io.prestosql.plugin.jdbc.StatsCollecting;
 import io.prestosql.plugin.jdbc.WriteMapping;
 import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.connector.ConnectorSession;
@@ -37,6 +37,7 @@ import javax.inject.Inject;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.Optional;
+import java.util.function.BiFunction;
 import java.util.function.UnaryOperator;
 
 import static com.google.common.base.Preconditions.checkArgument;
@@ -65,9 +66,9 @@ public class SqlServerClient
     };
 
     @Inject
-    public SqlServerClient(BaseJdbcConfig config)
+    public SqlServerClient(BaseJdbcConfig config, @StatsCollecting ConnectionFactory connectionFactory)
     {
-        super(config, "\"", new DriverConnectionFactory(new SQLServerDriver(), config));
+        super(config, "\"", connectionFactory);
     }
 
     @Override
@@ -101,10 +102,10 @@ public class SqlServerClient
     }
 
     @Override
-    public Optional<ColumnMapping> toPrestoType(ConnectorSession session, JdbcTypeHandle type)
+    public Optional<ColumnMapping> toPrestoType(ConnectorSession session, Connection connection, JdbcTypeHandle type)
     {
         // TODO implement proper type mapping
-        return super.toPrestoType(session, type)
+        return super.toPrestoType(session, connection, type)
                 .map(columnMapping -> new ColumnMapping(
                         columnMapping.getType(),
                         columnMapping.getReadFunction(),
@@ -148,11 +149,13 @@ public class SqlServerClient
     }
 
     @Override
-    protected String applyLimit(String sql, long limit)
+    protected Optional<BiFunction<String, Long, String>> limitFunction()
     {
-        String start = "SELECT ";
-        checkArgument(sql.startsWith(start));
-        return "SELECT TOP " + limit + " " + sql.substring(start.length());
+        return Optional.of((sql, limit) -> {
+            String start = "SELECT ";
+            checkArgument(sql.startsWith(start));
+            return "SELECT TOP " + limit + " " + sql.substring(start.length());
+        });
     }
 
     @Override

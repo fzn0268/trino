@@ -15,17 +15,19 @@ package io.prestosql.plugin.redshift;
 
 import io.prestosql.plugin.jdbc.BaseJdbcClient;
 import io.prestosql.plugin.jdbc.BaseJdbcConfig;
-import io.prestosql.plugin.jdbc.DriverConnectionFactory;
+import io.prestosql.plugin.jdbc.ConnectionFactory;
 import io.prestosql.plugin.jdbc.JdbcIdentity;
+import io.prestosql.plugin.jdbc.StatsCollecting;
 import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.connector.SchemaTableName;
-import org.postgresql.Driver;
 
 import javax.inject.Inject;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
+import java.util.Optional;
+import java.util.function.BiFunction;
 
 import static io.prestosql.plugin.jdbc.JdbcErrorCode.JDBC_ERROR;
 import static io.prestosql.spi.StandardErrorCode.NOT_SUPPORTED;
@@ -35,9 +37,9 @@ public class RedshiftClient
         extends BaseJdbcClient
 {
     @Inject
-    public RedshiftClient(BaseJdbcConfig config)
+    public RedshiftClient(BaseJdbcConfig config, @StatsCollecting ConnectionFactory connectionFactory)
     {
-        super(config, "\"", new DriverConnectionFactory(new Driver(), config));
+        super(config, "\"", connectionFactory);
     }
 
     @Override
@@ -71,9 +73,9 @@ public class RedshiftClient
     }
 
     @Override
-    protected String applyLimit(String sql, long limit)
+    protected Optional<BiFunction<String, Long, String>> limitFunction()
     {
-        return sql + " LIMIT " + limit;
+        return Optional.of((sql, limit) -> sql + " LIMIT " + limit);
     }
 
     @Override
