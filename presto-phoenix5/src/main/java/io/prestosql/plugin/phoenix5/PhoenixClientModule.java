@@ -63,7 +63,7 @@ public class PhoenixClientModule
         binder.bind(PhoenixClient.class).in(Scopes.SINGLETON);
         binder.bind(JdbcClient.class)
                 // TODO support JMX stats collection for phoenix connector
-                .annotatedWith(InternalBaseJdbc.class)
+//                .annotatedWith(InternalBaseJdbc.class)
                 .to(PhoenixClient.class)
                 .in(Scopes.SINGLETON);
         binder.bind(PhoenixMetadata.class).in(Scopes.SINGLETON);
