@@ -61,21 +61,11 @@ import static com.google.common.base.Verify.verify;
 import static com.google.common.collect.ImmutableMap.toImmutableMap;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.common.collect.Iterables.getOnlyElement;
+import static io.prestosql.plugin.jdbc.TypeHandlingJdbcPropertiesProvider.getUnsupportedTypeHandling;
+import static io.prestosql.plugin.jdbc.ColumnMapping.DISABLE_PUSHDOWN;
 import static io.prestosql.plugin.jdbc.JdbcErrorCode.JDBC_ERROR;
-import static io.prestosql.plugin.jdbc.StandardColumnMappings.bigintWriteFunction;
-import static io.prestosql.plugin.jdbc.StandardColumnMappings.booleanWriteFunction;
-import static io.prestosql.plugin.jdbc.StandardColumnMappings.charWriteFunction;
-import static io.prestosql.plugin.jdbc.StandardColumnMappings.dateWriteFunction;
-import static io.prestosql.plugin.jdbc.StandardColumnMappings.doubleWriteFunction;
-import static io.prestosql.plugin.jdbc.StandardColumnMappings.integerWriteFunction;
-import static io.prestosql.plugin.jdbc.StandardColumnMappings.jdbcTypeToPrestoType;
-import static io.prestosql.plugin.jdbc.StandardColumnMappings.longDecimalWriteFunction;
-import static io.prestosql.plugin.jdbc.StandardColumnMappings.realWriteFunction;
-import static io.prestosql.plugin.jdbc.StandardColumnMappings.shortDecimalWriteFunction;
-import static io.prestosql.plugin.jdbc.StandardColumnMappings.smallintWriteFunction;
-import static io.prestosql.plugin.jdbc.StandardColumnMappings.tinyintWriteFunction;
-import static io.prestosql.plugin.jdbc.StandardColumnMappings.varbinaryWriteFunction;
-import static io.prestosql.plugin.jdbc.StandardColumnMappings.varcharWriteFunction;
+import static io.prestosql.plugin.jdbc.StandardColumnMappings.*;
+import static io.prestosql.plugin.jdbc.UnsupportedTypeHandling.CONVERT_TO_VARCHAR;
 import static io.prestosql.spi.StandardErrorCode.NOT_FOUND;
 import static io.prestosql.spi.StandardErrorCode.NOT_SUPPORTED;
 import static io.prestosql.spi.type.BigintType.BIGINT;
@@ -87,6 +77,7 @@ import static io.prestosql.spi.type.RealType.REAL;
 import static io.prestosql.spi.type.SmallintType.SMALLINT;
 import static io.prestosql.spi.type.TinyintType.TINYINT;
 import static io.prestosql.spi.type.VarbinaryType.VARBINARY;
+import static io.prestosql.spi.type.VarcharType.createUnboundedVarcharType;
 import static io.prestosql.spi.type.Varchars.isVarcharType;
 import static java.lang.String.format;
 import static java.lang.String.join;
@@ -115,6 +106,7 @@ public class BaseJdbcClient
 
     protected final ConnectionFactory connectionFactory;
     protected final String identifierQuote;
+    protected final Set<String> jdbcTypesMappedToVarchar;
     protected final boolean caseInsensitiveNameMatching;
     protected final Cache<JdbcIdentity, Map<String, String>> remoteSchemaNames;
     protected final Cache<RemoteTableNameCacheKey, Map<String, String>> remoteTableNames;
@@ -124,6 +116,7 @@ public class BaseJdbcClient
         this(
                 identifierQuote,
                 connectionFactory,
+                config.getJdbcTypesMappedToVarchar(),
                 requireNonNull(config, "config is null").isCaseInsensitiveNameMatching(),
                 config.getCaseInsensitiveNameMatchingCacheTtl());
     }
@@ -131,11 +124,13 @@ public class BaseJdbcClient
     public BaseJdbcClient(
             String identifierQuote,
             ConnectionFactory connectionFactory,
+            Set<String> jdbcTypesMappedToVarchar,
             boolean caseInsensitiveNameMatching,
             Duration caseInsensitiveNameMatchingCacheTtl)
     {
         this.identifierQuote = requireNonNull(identifierQuote, "identifierQuote is null");
         this.connectionFactory = requireNonNull(connectionFactory, "connectionFactory is null");
+        this.jdbcTypesMappedToVarchar = ImmutableSet.copyOf(requireNonNull(jdbcTypesMappedToVarchar, "jdbcTypesMappedToVarchar is null"));
         requireNonNull(caseInsensitiveNameMatchingCacheTtl, "caseInsensitiveNameMatchingCacheTtl is null");
 
         this.caseInsensitiveNameMatching = caseInsensitiveNameMatching;
@@ -261,7 +256,39 @@ public class BaseJdbcClient
     @Override
     public Optional<ColumnMapping> toPrestoType(ConnectorSession session, Connection connection, JdbcTypeHandle typeHandle)
     {
-        return jdbcTypeToPrestoType(session, typeHandle);
+        Optional<ColumnMapping> mapping = getForcedMappingToVarchar(typeHandle);
+        if (mapping.isPresent()) {
+            return mapping;
+        }
+        Optional<ColumnMapping> connectorMapping = jdbcTypeToPrestoType(session, typeHandle);
+        if (connectorMapping.isPresent()) {
+            return connectorMapping;
+        }
+        if (getUnsupportedTypeHandling(session) == CONVERT_TO_VARCHAR) {
+            return mapToUnboundedVarchar(typeHandle);
+        }
+        return Optional.empty();
+    }
+
+    protected Optional<ColumnMapping> getForcedMappingToVarchar(JdbcTypeHandle typeHandle)
+    {
+        if (typeHandle.getJdbcTypeName().isPresent() && jdbcTypesMappedToVarchar.contains(typeHandle.getJdbcTypeName().get())) {
+            return mapToUnboundedVarchar(typeHandle);
+        }
+        return Optional.empty();
+    }
+
+    protected static Optional<ColumnMapping> mapToUnboundedVarchar(JdbcTypeHandle typeHandle)
+    {
+        return Optional.of(ColumnMapping.sliceMapping(
+                createUnboundedVarcharType(),
+                varcharReadFunction(),
+                (statement, index, value) -> {
+                    throw new PrestoException(
+                            NOT_SUPPORTED,
+                            "Underlying type that is mapped to VARCHAR is not supported for INSERT: " + typeHandle.getJdbcTypeName().get());
+                },
+                DISABLE_PUSHDOWN));
     }
 
     @Override

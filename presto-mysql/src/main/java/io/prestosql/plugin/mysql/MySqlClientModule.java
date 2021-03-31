@@ -17,13 +17,13 @@ import com.google.inject.Binder;
 import com.google.inject.Scopes;
 import com.mysql.jdbc.Driver;
 import io.airlift.configuration.AbstractConfigurationAwareModule;
-import io.prestosql.plugin.jdbc.BaseJdbcConfig;
-import io.prestosql.plugin.jdbc.JdbcClient;
+import io.prestosql.plugin.jdbc.*;
 
 import java.sql.SQLException;
 import java.util.Properties;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.inject.multibindings.Multibinder.newSetBinder;
 import static io.airlift.configuration.ConfigBinder.configBinder;
 
 public class MySqlClientModule
@@ -34,7 +34,10 @@ public class MySqlClientModule
     {
         binder.bind(JdbcClient.class).to(MySqlClient.class).in(Scopes.SINGLETON);
         ensureCatalogIsEmpty(buildConfigObject(BaseJdbcConfig.class).getConnectionUrl());
+        configBinder(binder).bindConfig(TypeHandlingJdbcConfig.class);
         configBinder(binder).bindConfig(MySqlConfig.class);
+        configBinder(binder).bindConfig(DecimalConfig.class);
+        newSetBinder(binder, SessionPropertiesProvider.class).addBinding().to(DecimalSessionPropertiesProvider.class).in(Scopes.SINGLETON);
     }
 
     private static void ensureCatalogIsEmpty(String connectionUrl)

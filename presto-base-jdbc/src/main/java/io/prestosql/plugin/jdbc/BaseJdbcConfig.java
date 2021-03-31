@@ -13,7 +13,10 @@
  */
 package io.prestosql.plugin.jdbc;
 
+import com.google.common.base.Splitter;
+import com.google.common.collect.ImmutableSet;
 import io.airlift.configuration.Config;
+import io.airlift.configuration.ConfigDescription;
 import io.airlift.configuration.ConfigSecuritySensitive;
 import io.airlift.units.Duration;
 import io.airlift.units.MinDuration;
@@ -21,6 +24,9 @@ import io.airlift.units.MinDuration;
 import javax.annotation.Nullable;
 import javax.validation.constraints.NotNull;
 
+import java.util.Set;
+
+import static com.google.common.base.Strings.nullToEmpty;
 import static java.util.concurrent.TimeUnit.MINUTES;
 
 public class BaseJdbcConfig
@@ -32,6 +38,8 @@ public class BaseJdbcConfig
     private String passwordCredentialName;
     private boolean caseInsensitiveNameMatching;
     private Duration caseInsensitiveNameMatchingCacheTtl = new Duration(1, MINUTES);
+    private Set<String> jdbcTypesMappedToVarchar = ImmutableSet.of();
+    private UnsupportedTypeHandling unsupportedTypeHandling = UnsupportedTypeHandling.IGNORE;
 
     @NotNull
     public String getConnectionUrl()
@@ -122,6 +130,31 @@ public class BaseJdbcConfig
     public BaseJdbcConfig setCaseInsensitiveNameMatchingCacheTtl(Duration caseInsensitiveNameMatchingCacheTtl)
     {
         this.caseInsensitiveNameMatchingCacheTtl = caseInsensitiveNameMatchingCacheTtl;
+        return this;
+    }
+
+    public Set<String> getJdbcTypesMappedToVarchar()
+    {
+        return jdbcTypesMappedToVarchar;
+    }
+    @Config("jdbc-types-mapped-to-varchar")
+    public BaseJdbcConfig setJdbcTypesMappedToVarchar(String jdbcTypesMappedToVarchar)
+    {
+        this.jdbcTypesMappedToVarchar = ImmutableSet.copyOf(Splitter.on(",").omitEmptyStrings().trimResults().split(nullToEmpty(jdbcTypesMappedToVarchar)));
+        return this;
+    }
+
+    @NotNull
+    public UnsupportedTypeHandling getUnsupportedTypeHandling()
+    {
+        return unsupportedTypeHandling;
+    }
+
+    @Config("unsupported-type-handling")
+    @ConfigDescription("Unsupported type handling strategy")
+    public BaseJdbcConfig setUnsupportedTypeHandling(UnsupportedTypeHandling unsupportedTypeHandling)
+    {
+        this.unsupportedTypeHandling = unsupportedTypeHandling;
         return this;
     }
 }

@@ -36,22 +36,14 @@ import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.connector.ConnectorSession;
 import io.prestosql.spi.connector.ConnectorTableMetadata;
 import io.prestosql.spi.connector.SchemaTableName;
-import io.prestosql.spi.type.StandardTypes;
-import io.prestosql.spi.type.Type;
-import io.prestosql.spi.type.TypeManager;
-import io.prestosql.spi.type.TypeSignature;
-import io.prestosql.spi.type.VarcharType;
+import io.prestosql.spi.type.*;
 
 import javax.inject.Inject;
 
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
-import java.sql.Connection;
-import java.sql.DatabaseMetaData;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
+import java.sql.*;
 import java.util.Collection;
 import java.util.Optional;
 import java.util.function.BiFunction;
@@ -64,20 +56,21 @@ import static com.mysql.jdbc.SQLError.SQL_STATE_ER_TABLE_EXISTS_ERROR;
 import static com.mysql.jdbc.SQLError.SQL_STATE_SYNTAX_ERROR;
 import static io.airlift.slice.Slices.utf8Slice;
 import static io.prestosql.plugin.jdbc.ColumnMapping.DISABLE_PUSHDOWN;
+import static io.prestosql.plugin.jdbc.DecimalConfig.DecimalMapping.ALLOW_OVERFLOW;
+import static io.prestosql.plugin.jdbc.DecimalSessionPropertiesProvider.*;
 import static io.prestosql.plugin.jdbc.JdbcErrorCode.JDBC_ERROR;
-import static io.prestosql.plugin.jdbc.StandardColumnMappings.realWriteFunction;
-import static io.prestosql.plugin.jdbc.StandardColumnMappings.timestampWriteFunctionUsingSqlTimestamp;
-import static io.prestosql.plugin.jdbc.StandardColumnMappings.varbinaryWriteFunction;
-import static io.prestosql.plugin.jdbc.StandardColumnMappings.varcharWriteFunction;
+import static io.prestosql.plugin.jdbc.StandardColumnMappings.*;
 import static io.prestosql.spi.StandardErrorCode.ALREADY_EXISTS;
 import static io.prestosql.spi.StandardErrorCode.INVALID_FUNCTION_ARGUMENT;
 import static io.prestosql.spi.StandardErrorCode.NOT_SUPPORTED;
+import static io.prestosql.spi.type.DecimalType.createDecimalType;
 import static io.prestosql.spi.type.RealType.REAL;
 import static io.prestosql.spi.type.TimeWithTimeZoneType.TIME_WITH_TIME_ZONE;
 import static io.prestosql.spi.type.TimestampType.TIMESTAMP;
 import static io.prestosql.spi.type.TimestampWithTimeZoneType.TIMESTAMP_WITH_TIME_ZONE;
 import static io.prestosql.spi.type.VarbinaryType.VARBINARY;
 import static io.prestosql.spi.type.Varchars.isVarcharType;
+import static java.lang.Math.min;
 import static java.lang.String.format;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Locale.ENGLISH;
@@ -162,8 +155,19 @@ public class MySqlClient
         String jdbcTypeName = typeHandle.getJdbcTypeName()
                 .orElseThrow(() -> new PrestoException(JDBC_ERROR, "Type name is missing: " + typeHandle));
 
+        Optional<ColumnMapping> mapping = getForcedMappingToVarchar(typeHandle);
+        if (mapping.isPresent()) {
+            return mapping;
+        }
         if (jdbcTypeName.equalsIgnoreCase("json")) {
             return Optional.of(jsonColumnMapping());
+        }
+        if (typeHandle.getJdbcType() == Types.DECIMAL && getDecimalRounding(session) == ALLOW_OVERFLOW) {
+            int precision = typeHandle.getColumnSize();
+            if (precision > Decimals.MAX_PRECISION) {
+                int scale = min(typeHandle.getDecimalDigits(), getDecimalDefaultScale(session));
+                return Optional.of(decimalColumnMapping(createDecimalType(Decimals.MAX_PRECISION, scale), getDecimalRoundingMode(session)));
+            }
         }
         return super.toPrestoType(session, connection, typeHandle);
     }

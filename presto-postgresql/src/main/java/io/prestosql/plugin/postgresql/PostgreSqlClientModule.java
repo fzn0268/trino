@@ -16,9 +16,10 @@ package io.prestosql.plugin.postgresql;
 import com.google.inject.Binder;
 import com.google.inject.Module;
 import com.google.inject.Scopes;
-import io.prestosql.plugin.jdbc.BaseJdbcConfig;
-import io.prestosql.plugin.jdbc.JdbcClient;
+import com.google.inject.multibindings.Multibinder;
+import io.prestosql.plugin.jdbc.*;
 
+import static com.google.inject.multibindings.Multibinder.newSetBinder;
 import static io.airlift.configuration.ConfigBinder.configBinder;
 
 public class PostgreSqlClientModule
@@ -29,5 +30,9 @@ public class PostgreSqlClientModule
     {
         binder.bind(JdbcClient.class).to(PostgreSqlClient.class).in(Scopes.SINGLETON);
         configBinder(binder).bindConfig(BaseJdbcConfig.class);
+        configBinder(binder).bindConfig(DecimalConfig.class);
+
+        Multibinder multiBinder = newSetBinder(binder, SessionPropertiesProvider.class);
+        multiBinder.addBinding().to(DecimalSessionPropertiesProvider.class).in(Scopes.SINGLETON);
     }
 }

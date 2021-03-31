@@ -13,7 +13,12 @@
  */
 package io.prestosql.tests.sql;
 
+import com.google.common.collect.ImmutableList;
+
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
+
+import static java.lang.String.format;
 
 public class TestTable
         implements AutoCloseable
@@ -23,11 +28,27 @@ public class TestTable
 
     private static final AtomicInteger instanceCounter = new AtomicInteger();
 
-    public TestTable(SqlExecutor sqlExecutor, String namePrefix, String createDdlTemplate)
+    public TestTable(SqlExecutor sqlExecutor, String namePrefix, String tableDefinition)
+    {
+        this(sqlExecutor, namePrefix, tableDefinition, ImmutableList.of());
+    }
+
+    public TestTable(SqlExecutor sqlExecutor, String namePrefix, String tableDefinition, List<String> rowsToInsert)
     {
         this.sqlExecutor = sqlExecutor;
         this.name = namePrefix + "_" + instanceCounter.incrementAndGet();
-        sqlExecutor.execute(createDdlTemplate.replace("{TABLE_NAME}", this.name));
+        sqlExecutor.execute(format("CREATE TABLE %s %s", name, tableDefinition));
+        try {
+            for (String row : rowsToInsert) {
+                // some databases do not support multi value insert statement
+                sqlExecutor.execute(format("INSERT INTO %s VALUES (%s)", name, row));
+            }
+        }
+        catch (Exception e) {
+            try (TestTable ignored = this) {
+                throw e;
+            }
+        }
     }
 
     public String getName()

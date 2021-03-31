@@ -18,12 +18,7 @@ import com.google.inject.Provides;
 import com.google.inject.Scopes;
 import com.google.inject.Singleton;
 import io.airlift.configuration.AbstractConfigurationAwareModule;
-import io.prestosql.plugin.jdbc.ConnectionFactory;
-import io.prestosql.plugin.jdbc.DriverConnectionFactory;
-import io.prestosql.plugin.jdbc.InternalBaseJdbc;
-import io.prestosql.plugin.jdbc.JdbcClient;
-import io.prestosql.plugin.jdbc.JdbcPageSinkProvider;
-import io.prestosql.plugin.jdbc.JdbcRecordSetProvider;
+import io.prestosql.plugin.jdbc.*;
 import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.connector.ConnectorPageSinkProvider;
 import io.prestosql.spi.connector.ConnectorRecordSetProvider;
@@ -41,6 +36,8 @@ import java.util.Optional;
 import java.util.Properties;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.inject.multibindings.Multibinder.newSetBinder;
+import static io.airlift.configuration.ConfigBinder.configBinder;
 import static io.prestosql.plugin.phoenix.PhoenixErrorCode.PHOENIX_CONFIG_ERROR;
 
 public class PhoenixClientModule
@@ -60,10 +57,12 @@ public class PhoenixClientModule
         binder.bind(ConnectorRecordSetProvider.class).to(JdbcRecordSetProvider.class).in(Scopes.SINGLETON);
         binder.bind(JdbcRecordSetProvider.class).in(Scopes.SINGLETON);
         binder.bind(ConnectorPageSinkProvider.class).to(JdbcPageSinkProvider.class).in(Scopes.SINGLETON);
+        configBinder(binder).bindConfig(TypeHandlingJdbcConfig.class);
+        newSetBinder(binder, SessionPropertiesProvider.class).addBinding().to(TypeHandlingJdbcPropertiesProvider.class);
         binder.bind(PhoenixClient.class).in(Scopes.SINGLETON);
         binder.bind(JdbcClient.class)
                 // TODO support JMX stats collection for phoenix connector
-                .annotatedWith(InternalBaseJdbc.class)
+//                .annotatedWith(InternalBaseJdbc.class)
                 .to(PhoenixClient.class)
                 .in(Scopes.SINGLETON);
         binder.bind(PhoenixMetadata.class).in(Scopes.SINGLETON);

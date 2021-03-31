@@ -16,6 +16,7 @@ package io.prestosql.plugin.mysql;
 import com.google.common.collect.ImmutableList;
 import io.airlift.testing.mysql.TestingMySqlServer;
 import io.prestosql.Session;
+import io.prestosql.plugin.jdbc.UnsupportedTypeHandling;
 import io.prestosql.spi.type.TimeZoneKey;
 import io.prestosql.spi.type.VarcharType;
 import io.prestosql.tests.AbstractTestQueryFramework;
@@ -25,16 +26,24 @@ import io.prestosql.tests.datatype.DataSetup;
 import io.prestosql.tests.datatype.DataTypeTest;
 import io.prestosql.tests.sql.JdbcSqlExecutor;
 import io.prestosql.tests.sql.PrestoSqlExecutor;
+import io.prestosql.tests.sql.TestTable;
 import org.testng.annotations.AfterClass;
+import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.ZoneId;
 
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Strings.repeat;
 import static com.google.common.base.Verify.verify;
+import static io.prestosql.plugin.jdbc.TypeHandlingJdbcPropertiesProvider.UNSUPPORTED_TYPE_HANDLING;
+import static io.prestosql.plugin.jdbc.DecimalConfig.DecimalMapping.ALLOW_OVERFLOW;
+import static io.prestosql.plugin.jdbc.DecimalConfig.DecimalMapping.STRICT;
+import static io.prestosql.plugin.jdbc.DecimalSessionPropertiesProvider.*;
+import static io.prestosql.plugin.jdbc.UnsupportedTypeHandling.CONVERT_TO_VARCHAR;
 import static io.prestosql.plugin.mysql.MySqlQueryRunner.createMySqlQueryRunner;
 import static io.prestosql.spi.type.TimeZoneKey.UTC_KEY;
 import static io.prestosql.spi.type.VarcharType.createUnboundedVarcharType;
@@ -51,6 +60,9 @@ import static io.prestosql.tests.datatype.DataType.stringDataType;
 import static io.prestosql.tests.datatype.DataType.tinyintDataType;
 import static io.prestosql.tests.datatype.DataType.varcharDataType;
 import static java.lang.String.format;
+import static java.math.RoundingMode.HALF_UP;
+import static java.math.RoundingMode.UNNECESSARY;
+import static java.util.Arrays.asList;
 import static java.util.Collections.emptyList;
 
 @Test
@@ -211,6 +223,175 @@ public class TestMySqlTypeMapping
     public void testDecimalExceedingPrecisionMax()
     {
         testUnsupportedDataType("decimal(50,0)");
+    }
+
+    @Test
+    public void testDecimalExceedingPrecisionMaxWithExceedingIntegerValues()
+    {
+        JdbcSqlExecutor jdbcSqlExecutor = new JdbcSqlExecutor(mysqlServer.getJdbcUrl());
+
+        try (TestTable testTable = new TestTable(
+                jdbcSqlExecutor,
+                "tpch.test_exceeding_max_decimal",
+                "(d_col decimal(65,25))",
+                asList("1234567890123456789012345678901234567890.123456789", "-1234567890123456789012345678901234567890.123456789"))) {
+            assertQuery(
+                    sessionWithDecimalMappingAllowOverflow(UNNECESSARY, 0),
+                    format("SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = 'tpch' AND table_schema||'.'||table_name = '%s'", testTable.getName()),
+                    "VALUES ('d_col', 'decimal(38,0)')");
+            assertQueryFails(
+                    sessionWithDecimalMappingAllowOverflow(UNNECESSARY, 0),
+                    "SELECT d_col FROM " + testTable.getName(),
+                    "Rounding necessary");
+            assertQueryFails(
+                    sessionWithDecimalMappingAllowOverflow(HALF_UP, 0),
+                    "SELECT d_col FROM " + testTable.getName(),
+                    "Decimal overflow");
+            assertQuery(
+                    sessionWithDecimalMappingStrict(CONVERT_TO_VARCHAR),
+                    format("SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = 'tpch' AND table_schema||'.'||table_name = '%s'", testTable.getName()),
+                    "VALUES ('d_col', 'varchar')");
+            assertQuery(
+                    sessionWithDecimalMappingStrict(CONVERT_TO_VARCHAR),
+                    "SELECT d_col FROM " + testTable.getName(),
+                    "VALUES ('1234567890123456789012345678901234567890.1234567890000000000000000'), ('-1234567890123456789012345678901234567890.1234567890000000000000000')");
+        }
+    }
+
+    @Test
+    public void testDecimalExceedingPrecisionMaxWithNonExceedingIntegerValues()
+    {
+        JdbcSqlExecutor jdbcSqlExecutor = new JdbcSqlExecutor(mysqlServer.getJdbcUrl());
+
+        try (TestTable testTable = new TestTable(
+                jdbcSqlExecutor,
+                "tpch.test_exceeding_max_decimal",
+                "(d_col decimal(60,20))",
+                asList("123456789012345678901234567890.123456789012345", "-123456789012345678901234567890.123456789012345"))) {
+            assertQuery(
+                    sessionWithDecimalMappingAllowOverflow(UNNECESSARY, 0),
+                    format("SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = 'tpch' AND table_schema||'.'||table_name = '%s'", testTable.getName()),
+                    "VALUES ('d_col', 'decimal(38,0)')");
+            assertQueryFails(
+                    sessionWithDecimalMappingAllowOverflow(UNNECESSARY, 0),
+                    "SELECT d_col FROM " + testTable.getName(),
+                    "Rounding necessary");
+            assertQuery(
+                    sessionWithDecimalMappingAllowOverflow(HALF_UP, 0),
+                    "SELECT d_col FROM " + testTable.getName(),
+                    "VALUES (123456789012345678901234567890), (-123456789012345678901234567890)");
+            assertQuery(
+                    sessionWithDecimalMappingAllowOverflow(UNNECESSARY, 8),
+                    format("SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = 'tpch' AND table_schema||'.'||table_name = '%s'", testTable.getName()),
+                    "VALUES ('d_col', 'decimal(38,8)')");
+            assertQueryFails(
+                    sessionWithDecimalMappingAllowOverflow(UNNECESSARY, 8),
+                    "SELECT d_col FROM " + testTable.getName(),
+                    "Rounding necessary");
+            assertQuery(
+                    sessionWithDecimalMappingAllowOverflow(HALF_UP, 8),
+                    "SELECT d_col FROM " + testTable.getName(),
+                    "VALUES (123456789012345678901234567890.12345679), (-123456789012345678901234567890.12345679)");
+            assertQuery(
+                    sessionWithDecimalMappingAllowOverflow(HALF_UP, 22),
+                    format("SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = 'tpch' AND table_schema||'.'||table_name = '%s'", testTable.getName()),
+                    "VALUES ('d_col', 'decimal(38,20)')");
+            assertQueryFails(
+                    sessionWithDecimalMappingAllowOverflow(HALF_UP, 20),
+                    "SELECT d_col FROM " + testTable.getName(),
+                    "Decimal overflow");
+            assertQueryFails(
+                    sessionWithDecimalMappingAllowOverflow(HALF_UP, 9),
+                    "SELECT d_col FROM " + testTable.getName(),
+                    "Decimal overflow");
+            assertQuery(
+                    sessionWithDecimalMappingStrict(CONVERT_TO_VARCHAR),
+                    format("SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = 'tpch' AND table_schema||'.'||table_name = '%s'", testTable.getName()),
+                    "VALUES ('d_col', 'varchar')");
+            assertQuery(
+                    sessionWithDecimalMappingStrict(CONVERT_TO_VARCHAR),
+                    "SELECT d_col FROM " + testTable.getName(),
+                    "VALUES ('123456789012345678901234567890.12345678901234500000'), ('-123456789012345678901234567890.12345678901234500000')");
+        }
+    }
+
+    @Test(dataProvider = "testDecimalExceedingPrecisionMaxProvider")
+    public void testDecimalExceedingPrecisionMaxWithSupportedValues(int typePrecision, int typeScale)
+    {
+        JdbcSqlExecutor jdbcSqlExecutor = new JdbcSqlExecutor(mysqlServer.getJdbcUrl());
+
+        try (TestTable testTable = new TestTable(
+                jdbcSqlExecutor,
+                "tpch.test_exceeding_max_decimal",
+                format("(d_col decimal(%d,%d))", typePrecision, typeScale),
+                asList("12.01", "-12.01", "123", "-123", "1.12345678", "-1.12345678"))) {
+            assertQuery(
+                    sessionWithDecimalMappingAllowOverflow(UNNECESSARY, 0),
+                    format("SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = 'tpch' AND table_schema||'.'||table_name = '%s'", testTable.getName()),
+                    "VALUES ('d_col', 'decimal(38,0)')");
+            assertQueryFails(
+                    sessionWithDecimalMappingAllowOverflow(UNNECESSARY, 0),
+                    "SELECT d_col FROM " + testTable.getName(),
+                    "Rounding necessary");
+            assertQuery(
+                    sessionWithDecimalMappingAllowOverflow(HALF_UP, 0),
+                    "SELECT d_col FROM " + testTable.getName(),
+                    "VALUES (12), (-12), (123), (-123), (1), (-1)");
+            assertQuery(
+                    sessionWithDecimalMappingAllowOverflow(HALF_UP, 3),
+                    format("SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = 'tpch' AND table_schema||'.'||table_name = '%s'", testTable.getName()),
+                    "VALUES ('d_col', 'decimal(38,3)')");
+            assertQuery(
+                    sessionWithDecimalMappingAllowOverflow(HALF_UP, 3),
+                    "SELECT d_col FROM " + testTable.getName(),
+                    "VALUES (12.01), (-12.01), (123), (-123), (1.123), (-1.123)");
+            assertQueryFails(
+                    sessionWithDecimalMappingAllowOverflow(UNNECESSARY, 3),
+                    "SELECT d_col FROM " + testTable.getName(),
+                    "Rounding necessary");
+            assertQuery(
+                    sessionWithDecimalMappingAllowOverflow(HALF_UP, 8),
+                    format("SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = 'tpch' AND table_schema||'.'||table_name = '%s'", testTable.getName()),
+                    "VALUES ('d_col', 'decimal(38,8)')");
+            assertQuery(
+                    sessionWithDecimalMappingAllowOverflow(HALF_UP, 8),
+                    "SELECT d_col FROM " + testTable.getName(),
+                    "VALUES (12.01), (-12.01), (123), (-123), (1.12345678), (-1.12345678)");
+            assertQuery(
+                    sessionWithDecimalMappingAllowOverflow(HALF_UP, 9),
+                    "SELECT d_col FROM " + testTable.getName(),
+                    "VALUES (12.01), (-12.01), (123), (-123), (1.12345678), (-1.12345678)");
+            assertQuery(
+                    sessionWithDecimalMappingAllowOverflow(UNNECESSARY, 8),
+                    "SELECT d_col FROM " + testTable.getName(),
+                    "VALUES (12.01), (-12.01), (123), (-123), (1.12345678), (-1.12345678)");
+        }
+    }
+
+    @DataProvider
+    public Object[][] testDecimalExceedingPrecisionMaxProvider()
+    {
+        return new Object[][] {
+                {40, 8},
+                {50, 10},
+        };
+    }
+
+    private Session sessionWithDecimalMappingAllowOverflow(RoundingMode roundingMode, int scale)
+    {
+        return Session.builder(getQueryRunner().getDefaultSession())
+                .setCatalogSessionProperty("mysql", DECIMAL_MAPPING, ALLOW_OVERFLOW.name())
+                .setCatalogSessionProperty("mysql", DECIMAL_ROUNDING_MODE, roundingMode.name())
+                .setCatalogSessionProperty("mysql", DECIMAL_DEFAULT_SCALE, Integer.valueOf(scale).toString())
+                .build();
+    }
+
+    private Session sessionWithDecimalMappingStrict(UnsupportedTypeHandling unsupportedTypeHandling)
+    {
+        return Session.builder(getQueryRunner().getDefaultSession())
+                .setCatalogSessionProperty("mysql", DECIMAL_MAPPING, STRICT.name())
+                .setCatalogSessionProperty("mysql", UNSUPPORTED_TYPE_HANDLING, unsupportedTypeHandling.name())
+                .build();
     }
 
     @Test

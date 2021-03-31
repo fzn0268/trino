@@ -43,14 +43,7 @@ import io.prestosql.spi.connector.ConnectorSession;
 import io.prestosql.spi.connector.ConnectorTableMetadata;
 import io.prestosql.spi.connector.SchemaTableName;
 import io.prestosql.spi.connector.TableNotFoundException;
-import io.prestosql.spi.type.ArrayType;
-import io.prestosql.spi.type.MapType;
-import io.prestosql.spi.type.StandardTypes;
-import io.prestosql.spi.type.TinyintType;
-import io.prestosql.spi.type.Type;
-import io.prestosql.spi.type.TypeManager;
-import io.prestosql.spi.type.TypeSignature;
-import io.prestosql.spi.type.VarcharType;
+import io.prestosql.spi.type.*;
 import org.postgresql.core.TypeInfo;
 import org.postgresql.jdbc.PgConnection;
 import org.postgresql.util.PGobject;
@@ -77,15 +70,17 @@ import java.util.function.BiFunction;
 
 import static com.fasterxml.jackson.core.JsonFactory.Feature.CANONICALIZE_FIELD_NAMES;
 import static com.fasterxml.jackson.databind.SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS;
+import static com.google.common.base.Verify.verify;
 import static io.airlift.slice.SizeOf.SIZE_OF_LONG;
 import static io.airlift.slice.Slices.utf8Slice;
 import static io.airlift.slice.Slices.wrappedLongArray;
+import static io.prestosql.plugin.jdbc.TypeHandlingJdbcPropertiesProvider.getUnsupportedTypeHandling;
 import static io.prestosql.plugin.jdbc.ColumnMapping.DISABLE_PUSHDOWN;
+import static io.prestosql.plugin.jdbc.DecimalConfig.DecimalMapping.ALLOW_OVERFLOW;
+import static io.prestosql.plugin.jdbc.DecimalSessionPropertiesProvider.*;
 import static io.prestosql.plugin.jdbc.JdbcErrorCode.JDBC_ERROR;
-import static io.prestosql.plugin.jdbc.StandardColumnMappings.timestampColumnMapping;
-import static io.prestosql.plugin.jdbc.StandardColumnMappings.timestampWriteFunction;
-import static io.prestosql.plugin.jdbc.StandardColumnMappings.tinyintWriteFunction;
-import static io.prestosql.plugin.jdbc.StandardColumnMappings.varbinaryWriteFunction;
+import static io.prestosql.plugin.jdbc.StandardColumnMappings.*;
+import static io.prestosql.plugin.jdbc.UnsupportedTypeHandling.IGNORE;
 import static io.prestosql.plugin.postgresql.TypeUtils.getArrayElementPgTypeName;
 import static io.prestosql.plugin.postgresql.TypeUtils.getJdbcObjectArray;
 import static io.prestosql.plugin.postgresql.TypeUtils.jdbcObjectArrayToBlock;
@@ -95,10 +90,12 @@ import static io.prestosql.spi.StandardErrorCode.INVALID_FUNCTION_ARGUMENT;
 import static io.prestosql.spi.StandardErrorCode.NOT_SUPPORTED;
 import static io.prestosql.spi.type.DateTimeEncoding.packDateTimeWithZone;
 import static io.prestosql.spi.type.DateTimeEncoding.unpackMillisUtc;
+import static io.prestosql.spi.type.DecimalType.createDecimalType;
 import static io.prestosql.spi.type.TimeZoneKey.UTC_KEY;
 import static io.prestosql.spi.type.TimestampType.TIMESTAMP;
 import static io.prestosql.spi.type.TimestampWithTimeZoneType.TIMESTAMP_WITH_TIME_ZONE;
 import static io.prestosql.spi.type.VarbinaryType.VARBINARY;
+import static java.lang.Math.min;
 import static java.lang.String.format;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.sql.DatabaseMetaData.columnNoNulls;
@@ -213,6 +210,7 @@ public class PostgreSqlClient
                         boolean nullable = (resultSet.getInt("NULLABLE") != columnNoNulls);
                         columns.add(new JdbcColumnHandle(columnName, typeHandle, columnMapping.get().getType(), nullable));
                     }
+                    verify(columnMapping.isPresent() || getUnsupportedTypeHandling(session) == IGNORE, "Unsupported type handling is set to %s, but toPrestoType() returned empty");
                 }
                 if (columns.isEmpty()) {
                     // In rare cases a table might have no columns.
@@ -261,6 +259,10 @@ public class PostgreSqlClient
         String jdbcTypeName = typeHandle.getJdbcTypeName()
                 .orElseThrow(() -> new PrestoException(JDBC_ERROR, "Type name is missing: " + typeHandle));
 
+        Optional<ColumnMapping> mapping = getForcedMappingToVarchar(typeHandle);
+        if (mapping.isPresent()) {
+            return mapping;
+        }
         switch (jdbcTypeName) {
             case "uuid":
                 return Optional.of(uuidColumnMapping());
@@ -279,6 +281,18 @@ public class PostgreSqlClient
         }
         if (typeHandle.getJdbcType() == Types.TIMESTAMP) {
             return Optional.of(timestampColumnMapping(session));
+        }
+        if (typeHandle.getJdbcType() == Types.NUMERIC && getDecimalRounding(session) == ALLOW_OVERFLOW) {
+            if (typeHandle.getColumnSize() == 131089) {
+                // decimal type with unspecified scale - up to 131072 digits before the decimal point; up to 16383 digits after the decimal point)
+                // 131089 = SELECT LENGTH(pow(10::numeric,131071)::varchar); 131071 = 2^17-1  (org.postgresql.jdbc.TypeInfoCache#getDisplaySize)
+                return Optional.of(decimalColumnMapping(createDecimalType(Decimals.MAX_PRECISION, getDecimalDefaultScale(session)), getDecimalRoundingMode(session)));
+            }
+            int precision = typeHandle.getColumnSize();
+            if (precision > Decimals.MAX_PRECISION) {
+                int scale = min(typeHandle.getDecimalDigits(), getDecimalDefaultScale(session));
+                return Optional.of(decimalColumnMapping(createDecimalType(Decimals.MAX_PRECISION, scale), getDecimalRoundingMode(session)));
+            }
         }
         if (typeHandle.getJdbcType() == Types.ARRAY && supportArrays) {
             if (!typeHandle.getArrayDimensions().isPresent()) {

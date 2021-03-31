@@ -14,9 +14,12 @@
 package io.prestosql.plugin.phoenix;
 
 import com.google.inject.Injector;
+import com.google.inject.Key;
+import com.google.inject.util.Types;
 import io.airlift.bootstrap.Bootstrap;
 import io.airlift.bootstrap.LifeCycleManager;
 import io.airlift.json.JsonModule;
+import io.prestosql.plugin.jdbc.SessionPropertiesProvider;
 import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.classloader.ThreadContextClassLoader;
 import io.prestosql.spi.connector.Connector;
@@ -31,6 +34,7 @@ import io.prestosql.spi.connector.classloader.ClassLoaderSafeConnectorPageSinkPr
 import io.prestosql.spi.connector.classloader.ClassLoaderSafeConnectorSplitManager;
 
 import java.util.Map;
+import java.util.Set;
 
 import static io.prestosql.plugin.phoenix.PhoenixErrorCode.PHOENIX_INTERNAL_ERROR;
 import static java.util.Objects.requireNonNull;
@@ -78,6 +82,7 @@ public class PhoenixConnectorFactory
             ConnectorPageSinkProvider pageSinkProvider = injector.getInstance(ConnectorPageSinkProvider.class);
             PhoenixTableProperties tableProperties = injector.getInstance(PhoenixTableProperties.class);
             PhoenixColumnProperties columnProperties = injector.getInstance(PhoenixColumnProperties.class);
+            Set<SessionPropertiesProvider> sessionPropertiesProviders = (Set<SessionPropertiesProvider>) injector.getInstance(Key.get(Types.setOf(SessionPropertiesProvider.class)));
 
             return new PhoenixConnector(
                     lifeCycleManager,
@@ -86,7 +91,8 @@ public class PhoenixConnectorFactory
                     recordSetProvider,
                     new ClassLoaderSafeConnectorPageSinkProvider(pageSinkProvider, classLoader),
                     tableProperties,
-                    columnProperties);
+                    columnProperties,
+                    sessionPropertiesProviders);
         }
         catch (Exception e) {
             throw new PrestoException(PHOENIX_INTERNAL_ERROR, e);

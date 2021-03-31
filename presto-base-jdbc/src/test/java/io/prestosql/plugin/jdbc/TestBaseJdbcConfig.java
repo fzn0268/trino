@@ -29,7 +29,8 @@ public class TestBaseJdbcConfig
                 .setConnectionUser(null)
                 .setConnectionPassword(null)
                 .setUserCredentialName(null)
-                .setPasswordCredentialName(null));
+                .setPasswordCredentialName(null)
+                .setJdbcTypesMappedToVarchar(""));
     }
 
     @Test

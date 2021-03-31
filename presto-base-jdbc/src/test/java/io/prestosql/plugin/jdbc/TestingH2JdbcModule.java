@@ -31,6 +31,7 @@ class TestingH2JdbcModule
     public void configure(Binder binder)
     {
         configBinder(binder).bindConfig(BaseJdbcConfig.class);
+        configBinder(binder).bindConfig(TypeHandlingJdbcConfig.class);
     }
 
     @Provides

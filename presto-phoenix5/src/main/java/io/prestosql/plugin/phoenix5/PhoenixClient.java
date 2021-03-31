@@ -74,11 +74,13 @@ import java.util.function.BiFunction;
 
 import static com.google.common.base.MoreObjects.firstNonNull;
 import static com.google.common.base.Preconditions.checkArgument;
+import static io.prestosql.plugin.jdbc.TypeHandlingJdbcPropertiesProvider.getUnsupportedTypeHandling;
 import static io.prestosql.plugin.jdbc.StandardColumnMappings.doubleWriteFunction;
 import static io.prestosql.plugin.jdbc.StandardColumnMappings.realColumnMapping;
 import static io.prestosql.plugin.jdbc.StandardColumnMappings.realWriteFunction;
 import static io.prestosql.plugin.jdbc.StandardColumnMappings.timeWriteFunction;
 import static io.prestosql.plugin.jdbc.StandardColumnMappings.varcharColumnMapping;
+import static io.prestosql.plugin.jdbc.UnsupportedTypeHandling.CONVERT_TO_VARCHAR;
 import static io.prestosql.plugin.phoenix5.MetadataUtil.toPhoenixSchemaName;
 import static io.prestosql.plugin.phoenix5.PhoenixClientModule.getConnectionProperties;
 import static io.prestosql.plugin.phoenix5.PhoenixErrorCode.PHOENIX_METADATA_ERROR;
@@ -118,6 +120,7 @@ public class PhoenixClient
         super(
                 ESCAPE_CHARACTER,
                 connectionFactory,
+                ImmutableSet.of(),
                 config.isCaseInsensitiveNameMatching(),
                 config.getCaseInsensitiveNameMatchingCacheTtl());
         this.configuration = new Configuration(false);
@@ -247,6 +250,9 @@ public class PhoenixClient
             case TIMESTAMP:
             case TIME_WITH_TIMEZONE:
             case TIMESTAMP_WITH_TIMEZONE:
+                if (getUnsupportedTypeHandling(session) == CONVERT_TO_VARCHAR) {
+                    return mapToUnboundedVarchar(typeHandle);
+                }
                 return Optional.empty();
             case FLOAT:
                 return Optional.of(realColumnMapping());
